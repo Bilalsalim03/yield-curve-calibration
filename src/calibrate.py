@@ -8,34 +8,39 @@ from src.models import vasicek_yield
 
 
 def vasicek_residuals(params, taus, market_yields):
-    """Difference between model and market yields at each maturity."""
-    a, b, sigma, r0 = params
-    return vasicek_yield(a, b, sigma, r0, taus) - market_yields
+    """Residuals with a parametrised as exp(log_a) to enforce a > 0."""
+    log_a, b, sigma, r0 = params
+    return vasicek_yield(np.exp(log_a), b, sigma, r0, taus) - market_yields
 
 
-def calibrate_vasicek(taus, market_yields, x0=(0.1, 0.06, 0.01, 0.04)):
+def calibrate_vasicek(taus, market_yields, x0=None):
     """
     Fit Vasicek parameters by Levenberg-Marquardt least squares.
-
-    Returns a dict with the fitted parameters, RMSE in basis points,
-    and wall-clock calibration time in seconds.
+    x0 is (a, b, sigma, r0); a is optimised in log space for positivity.
     """
+    if x0 is None:
+        x0 = (0.1, 0.06, 0.01, 0.04)
+    a0, b0, s0, r00 = x0
+    x0_internal = (np.log(max(a0, 1e-3)), b0, s0, r00)
+
     t0 = time.perf_counter()
+    result =     lb = (np.log(0.01), 0.0, 0.0, 0.0)
+    ub = (np.log(1.0), 0.20, 0.05, 0.15)
+    x0_internal = np.clip(x0_internal, np.array(lb) + 1e-6, np.array(ub) - 1e-6)
     result = least_squares(
-        vasicek_residuals, x0, args=(taus, market_yields), method="lm"
+        vasicek_residuals, x0_internal, args=(taus, market_yields),
+        method="trf", bounds=(lb, ub),
     )
     elapsed = time.perf_counter() - t0
 
-    a, b, sigma, r0 = result.x
-    rmse_bps = np.sqrt(np.mean(result.fun**2)) * 1e4
-
+    log_a, b, sigma, r0 = result.x
     return {
-        "a": a, "b": b, "sigma": sigma, "r0": r0,
-        "rmse_bps": rmse_bps,
+        "a": np.exp(log_a), "b": b, "sigma": sigma, "r0": r0,
+        "rmse_bps": np.sqrt(np.mean(result.fun**2)) * 1e4,
         "time_s": elapsed,
+        "nfev": result.nfev,
         "success": result.success,
     }
-
 from src.models import hull_white_yield
 
 
